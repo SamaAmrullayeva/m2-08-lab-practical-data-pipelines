@@ -1,0 +1,220 @@
+notepad pipeline-design.md
+
+Data Pipeline Architecture Design
+Overview
+
+This document describes the design of a production data pipeline for a UK-based online retailer. The pipeline processes transactional retail data coming from two sources: a historical dataset loaded in batch and a stream of new transactions arriving one row at a time. The system is responsible for ingesting, validating, transforming, and storing the data in a layered architecture that supports analytics and machine learning use cases.
+
+The pipeline is designed to ensure reliability, traceability, and data quality. Every stage of the pipeline has a clearly defined responsibility. Invalid records are separated into a quarantine area to prevent corruption of downstream datasets. Clean data is transformed into analytics-ready tables and customer-level features that support both a BI dashboard and a machine learning model.
+
+The architecture supports both batch and incremental processing and includes monitoring mechanisms that detect failures, data quality degradation, and schema changes.
+
+
+
+┌───────────────────────┐      ┌────────────────────────┐
+│ Historical Batch File │      │ Live Transaction Stream│
+│ Online Retail.xlsx    │      │ (row-by-row events)    │
+└──────────────┬────────┘      └──────────────┬─────────┘
+               │                              │
+               ▼                              ▼
+        ┌───────────────┐              ┌───────────────┐
+        │ Batch Ingest  │              │ Stream Ingest │
+        │ ETL Loader    │              │ Message Queue │
+        └────────┬──────┘              └───────┬───────┘
+                 │                             │
+                 └──────────────┬──────────────┘
+                                ▼
+                       ┌───────────────────┐
+                       │ Raw Storage Layer │
+                       │ (Landing Zone)    │
+                       └─────────┬─────────┘
+                                 ▼
+                       ┌───────────────────┐
+                       │ Validation Layer  │
+                       │ Schema + Rules    │
+                       └─────────┬─────────┘
+                                 │
+                   ┌─────────────┴─────────────┐
+                   ▼                           ▼
+           ┌───────────────┐           ┌────────────────┐
+           │ Clean Storage │           │ Quarantine /   │
+           │ Valid Data    │           │ Dead Letter    │
+           └────────┬──────┘           └────────────────┘
+                    ▼
+           ┌────────────────────┐
+           │ Transformation     │
+           │ & Enrichment       │
+           └─────────┬──────────┘
+                     ▼
+            ┌────────────────────┐
+            │ Feature Storage    │
+            │ Customer Features  │
+            └─────────┬──────────┘
+                      ▼
+          ┌──────────────────────────┐
+          │ Consumers                │
+          │                          │
+          │ BI Dashboard             │
+          │ ML Model Training        │
+          └─────────────┬────────────┘
+                        ▼
+               ┌────────────────────┐
+               │ Monitoring System  │
+               │ Alerts & Metrics   │
+               └────────────────────┘
+
+1.2 Component Descriptions
+Data Sources
+
+The pipeline receives data from two sources. The first source is a historical dataset called Online Retail.xlsx containing past transaction records. This dataset is loaded in batch to bootstrap the system and populate the initial dataset. The second source is a live stream of transactions representing new order events arriving continuously. These streaming records simulate real-time activity in the retailer's system.
+
+Batch Ingestion
+
+The batch ingestion component loads the historical Excel dataset and converts it into a structured format suitable for large-scale processing. During ingestion, minimal transformation is applied to preserve the raw data. The ingestion process reads the Excel file using an ETL script and writes the records into the raw storage layer.
+
+The output of this stage is raw transaction data stored in a columnar format such as Parquet.
+
+Stream Ingestion
+
+The stream ingestion layer receives new transaction events one row at a time. These events are first captured by a message queue to ensure reliable delivery and buffering in case of spikes in incoming data. The stream ingestion service reads messages from the queue and writes them into the raw storage layer.
+
+This approach ensures that the pipeline can handle continuous incoming data while maintaining durability and fault tolerance.
+
+Raw Storage Layer (Landing Zone)
+
+The raw storage layer stores data exactly as it arrives from the sources without any modifications. This layer acts as a landing zone that preserves the original records for auditing and reproducibility. Keeping raw data immutable allows the pipeline to be reprocessed from the beginning if needed.
+
+The raw data is stored in Parquet format and partitioned by ingestion date to improve query performance and data organization.
+
+Validation Layer
+
+The validation layer is responsible for checking every incoming record for structural correctness and business rule compliance. It ensures that fields have the correct data types, required values are present, and business logic is respected. Records that pass validation are forwarded to the clean data layer, while records that fail are sent to a quarantine area.
+
+This layer protects downstream systems from corrupted or inconsistent data.
+
+Quarantine / Dead Letter Storage
+
+Records that fail validation checks are stored in a quarantine or dead letter storage area. This storage contains the failed records along with metadata describing which validation rule was violated. Data engineers or operators can review these records, diagnose issues in the source system, and reprocess them once the issue has been corrected.
+
+This approach prevents bad data from contaminating analytics datasets while preserving the records for investigation.
+
+Clean Data Storage
+
+The clean storage layer contains validated and standardized transaction records. At this stage the data conforms to the expected schema and passes all validation checks. Clean data is stored in a structured format optimized for analytics queries.
+
+The clean dataset serves as the primary data source for analytics and downstream transformations.
+
+Transformation and Enrichment Layer
+
+The transformation layer prepares the validated data for analytical use cases. In this stage additional derived fields are computed and datasets are enriched with aggregated metrics. Examples include calculating line totals for transactions, generating date components, and aggregating customer-level metrics.
+
+This stage transforms raw transactional data into datasets that are easier for analysts and machine learning models to use.
+
+Feature Storage
+
+The feature storage layer contains aggregated customer-level features derived from the transaction history. These features are used by machine learning models to predict customer behavior. Examples include total customer spending, purchase frequency, and recency of last purchase.
+
+The feature store is updated daily to ensure that the machine learning model has access to fresh data.
+
+Consumers
+
+Two primary consumers use the processed data.
+
+The first consumer is a business intelligence dashboard that displays sales metrics such as daily revenue, top-selling products, and geographic distribution of customers. This dashboard is updated nightly.
+
+The second consumer is a machine learning model that predicts whether a customer is likely to become a high-value customer. The model is retrained weekly using the latest feature data.
+
+Monitoring and Alerting
+
+The monitoring system tracks the health of the pipeline and ensures data quality. Metrics such as data freshness, record volume, validation failure rate, and schema consistency are continuously monitored. Alerts are triggered when anomalies occur, allowing operators to quickly detect and resolve issues.
+
+Monitoring ensures that the pipeline remains reliable and that downstream users receive accurate and timely data.
+
+Task 2: Validation and Error Handling Design
+2.1 Validation Rules
+Schema Validation Rules
+
+The following schema rules ensure that records have the correct structure and data types.
+
+InvoiceNo must be a non-empty string.
+
+StockCode must be a valid string representing a product code.
+
+Quantity must be an integer value.
+
+InvoiceDate must be a valid timestamp.
+
+UnitPrice must be a numeric value.
+
+Country must be a non-empty string.
+
+These rules guarantee that records conform to the expected schema before entering the clean data layer.
+
+Value Range Validation Rules
+
+Value range checks ensure that numerical values fall within sensible limits.
+
+Quantity must not equal zero.
+
+UnitPrice must be greater than zero for regular purchase transactions.
+
+UnitPrice must be less than a predefined upper threshold to avoid extreme outliers.
+
+These validations prevent invalid numerical values from affecting analytics results.
+
+Business Rule Validations
+
+Business rules enforce domain-specific logic.
+
+If the InvoiceNo begins with the character "C", the transaction represents a cancellation and Quantity must be negative.
+
+For normal purchase transactions, Quantity must be positive.
+
+Line totals calculated from Quantity and UnitPrice must fall within reasonable limits to detect anomalies.
+
+These rules ensure that transactional data reflects realistic business events.
+
+2.2 Error Handling Flow
+
+When a record fails validation, the pipeline handles it according to the type of failure.
+
+If a record fails schema validation, the record is rejected and stored in the quarantine storage along with an error message describing the violation. An alert is logged to notify operators of the schema mismatch.
+
+If a record fails value range validation, the record is also moved to quarantine. Operators are notified when the number of failures exceeds a predefined threshold, indicating a possible upstream data issue.
+
+If a record violates a business rule, the record is flagged and stored in quarantine for manual inspection. Data engineers can review these records, correct issues in the source data if necessary, and reprocess them through the pipeline.
+
+Recovery of quarantined records occurs after the source problem has been fixed. The corrected records are reinserted into the validation stage and processed normally through the pipeline.
+
+Task 3: Transformation and Storage Design
+3.1 Transformations
+
+Several transformations are applied to validated data in order to prepare it for analysis and machine learning.
+
+Cleaning operations remove inconsistencies and standardize values. These include trimming whitespace from text fields, normalizing country names, and handling missing product descriptions.
+
+Derived columns are computed to enrich the dataset. One example is the line total value for each transaction, calculated by multiplying Quantity by UnitPrice. Additional date components such as year, month, and day are extracted from the transaction timestamp.
+
+Customer-level aggregations summarize the purchasing behavior of each customer. Metrics such as total revenue per customer, number of orders, average order value, and number of unique products purchased are calculated.
+
+Feature engineering is performed for the machine learning model. Features include recency of last purchase, purchase frequency, and total spending during the observation window. These features allow the model to predict which customers are likely to become high-value customers.
+
+All transformations are designed to be idempotent, meaning they produce the same output if executed multiple times on the same input data. This property allows the pipeline to safely reprocess historical data when necessary.
+
+3.2 Storage Layers
+Layer	Contents	Format	Update Frequency	Retention
+Raw	Original ingested transaction records	Parquet	Continuous	Permanent
+Clean	Validated and standardized transactions	Parquet	Daily	5 years
+Feature	Aggregated customer features	Parquet	Daily	2 years
+
+Parquet is chosen as the storage format because it is a columnar storage format that supports efficient compression and fast analytical queries. It is widely supported by data processing frameworks and is well suited for large-scale data pipelines.
+
+3.3 Incremental Update Strategy
+
+The pipeline processes new data incrementally by tracking the timestamp of the last successfully processed record. This timestamp acts as a high-water mark that prevents the pipeline from reprocessing the same records multiple times.
+
+When new transactions arrive through the streaming source, they are appended to the raw storage layer and processed through validation and transformation stages. The pipeline processes only records that have timestamps greater than the last processed timestamp.
+
+Late-arriving records are handled by allowing a grace period during which recent partitions can be reprocessed to incorporate delayed data. Customer-level features are refreshed daily to reflect the latest transactions.
+
+The machine learning model uses these updated features and is retrained on a weekly schedule.
